@@ -4,12 +4,8 @@ Security utilities — JWT encoding/decoding and password hashing.
 Design decisions:
 - Access tokens: short-lived (15 min), stateless JWT — not stored in DB.
 - Refresh tokens: long-lived (7 days), stored as SHA-256 hash in DB.
-  The raw token is only ever sent to the client once; we never store it
-  in plaintext, so a DB breach cannot be used to forge sessions.
-- Passwords: bcrypt with configurable rounds (default 12).
-  passlib's CryptContext handles algorithm migration transparently.
-- Token comparison: uses hmac.compare_digest (via secrets) to prevent
-  timing-side-channel attacks on token validation.
+- Passwords: Raw bcrypt (bypassing passlib due to modern bcrypt incompatibilities).
+  Passwords over 72 bytes are pre-hashed with SHA-256 to prevent bcrypt crashes.
 """
 
 import hashlib
@@ -17,25 +13,31 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 from app.core.exceptions import UnauthorizedError
 
+
 # ── Password hashing ──────────────────────────────────────────────────────────
 
-_pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=settings.BCRYPT_ROUNDS,
-)
-
+def _prepare_password(plain: str) -> bytes:
+    """
+    Bcrypt has a strict maximum length of 72 bytes.
+    If a user provides a password longer than this (e.g., a long passphrase),
+    we pre-hash it with SHA-256 to compress it into a fixed, safe length.
+    """
+    pwd_bytes = plain.encode("utf-8")
+    if len(pwd_bytes) > 72:
+        return hashlib.sha256(pwd_bytes).hexdigest().encode("ascii")
+    return pwd_bytes
 
 def hash_password(plain: str) -> str:
     """Return bcrypt hash of the password."""
-    return _pwd_context.hash(plain)
-
+    pwd_bytes = _prepare_password(plain)
+    salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
+    return bcrypt.hashpw(pwd_bytes, salt).decode("ascii")
 
 def verify_password(plain: str, hashed: str) -> bool:
     """
@@ -43,7 +45,8 @@ def verify_password(plain: str, hashed: str) -> bool:
     Returns False (never raises) so callers can handle failures uniformly.
     """
     try:
-        return _pwd_context.verify(plain, hashed)
+        pwd_bytes = _prepare_password(plain)
+        return bcrypt.checkpw(pwd_bytes, hashed.encode("ascii"))
     except Exception:
         return False
 
@@ -51,16 +54,6 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ── JWT (access token) ────────────────────────────────────────────────────────
 
 def create_access_token(subject: str, extra_claims: dict[str, Any] | None = None) -> str:
-    """
-    Encode a short-lived JWT access token.
-
-    `subject` is the user's UUID string.
-    `extra_claims` can carry non-sensitive metadata (e.g. email, is_active).
-
-    We deliberately do NOT embed sensitive data (roles, permissions) here
-    because JWTs are client-readable. Any authorisation check that matters
-    must be verified against the DB, not trusted from the token alone.
-    """
     now = datetime.now(UTC)
     claims: dict[str, Any] = {
         "sub": subject,
@@ -74,10 +67,6 @@ def create_access_token(subject: str, extra_claims: dict[str, Any] | None = None
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
-    """
-    Decode and validate a JWT access token.
-    Raises UnauthorizedError on any failure — expired, tampered, wrong type.
-    """
     try:
         payload = jwt.decode(
             token,
@@ -96,27 +85,12 @@ def decode_access_token(token: str) -> dict[str, Any]:
 # ── Refresh tokens ────────────────────────────────────────────────────────────
 
 def generate_refresh_token() -> tuple[str, str]:
-    """
-    Generate a cryptographically secure refresh token.
-
-    Returns:
-        (raw_token, hashed_token)
-        - raw_token  → sent to the client once, stored in HttpOnly cookie.
-        - hashed_token → stored in the database. We never store raw tokens.
-
-    Uses SHA-256 for hashing (not bcrypt) because:
-    - The raw token is already 32 bytes of CSPRNG entropy — no need for
-      the key-stretching that bcrypt provides against weak passwords.
-    - SHA-256 is O(1) vs bcrypt's intentionally slow O(2^rounds), which
-      matters when validating on every authenticated request that uses refresh.
-    """
     raw = secrets.token_urlsafe(32)
     hashed = _hash_token(raw)
     return raw, hashed
 
 
 def hash_refresh_token(raw: str) -> str:
-    """Hash a raw refresh token for DB lookup."""
     return _hash_token(raw)
 
 
@@ -125,8 +99,4 @@ def _hash_token(raw: str) -> str:
 
 
 def safe_str_compare(a: str, b: str) -> bool:
-    """
-    Constant-time string comparison.
-    Prevents timing-oracle attacks when comparing token values.
-    """
     return secrets.compare_digest(a.encode(), b.encode())

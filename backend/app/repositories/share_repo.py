@@ -7,7 +7,7 @@ Access-check design:
     The service uses this set to answer "can this user see this note?"
     in constant time, regardless of how many notes have been shared with them.
 """
-
+from __future__ import annotations
 import uuid
 from typing import Any
 

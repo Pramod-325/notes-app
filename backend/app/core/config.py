@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = False
     # Comma-separated list in .env → list[str] via validator
-    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000", "https://kaleidoscopic-puffpuff-66a4da.netlify.app"]
 
     # ── Security ───────────────────────────────────────────────────────────────
     BCRYPT_ROUNDS: Annotated[int, Field(ge=10, le=14)] = 12
@@ -48,6 +48,28 @@ class Settings(BaseSettings):
     def secret_must_be_long(cls, v: str) -> str:
         if len(v) < 32:
             raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
+        return v
+
+    @field_validator("DATABASE_URL", "DATABASE_URL_DIRECT", mode="before")
+    @classmethod
+    def ensure_async_driver(cls, v: str) -> str:
+        if not isinstance(v, str):
+            return v
+        
+        # 1. Force the asyncpg protocol prefix
+        if v.startswith("postgresql://"):
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+            
+        # 2. Fix the SSL parameter for asyncpg compatibility
+        # If '?sslmode=' is in the URL string, strip it off so it doesn't break asyncpg
+        if "?sslmode=" in v or "&sslmode=" in v:
+            # Split the connection string at the query parameter
+            base_url, _ = v.split("sslmode=", 1)
+            # Strip trailing '?' or '&' left behind from splitting
+            v = base_url.rstrip("?&")
+
         return v
 
     @property

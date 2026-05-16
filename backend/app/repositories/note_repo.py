@@ -10,7 +10,7 @@ Performance notes:
     1. List notes by owner, sorted by updated_at  →  hot path
     2. Get single note by owner + id              →  auth check
 """
-
+from __future__ import annotations
 import uuid
 from typing import Any
 
