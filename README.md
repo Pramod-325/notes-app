@@ -2,6 +2,9 @@
 
 A robust, production-grade monolith API for a basic note-taking application designed with offline-first synchronization in mind. Built with FastAPI (Python) and React.
 
+## 💫 Live Link: https://kaleidoscopic-puffpuff-66a4da.netlify.app/ <br>
+## 💫 Base API URL: https://notes-app-09iq.onrender.com/api/v1
+
 ## 🚀 Features
 
 * **Offline-Ready Resilience:** Uses `soft_delete` to gracefully handle Delete/Update collisions from offline devices.
